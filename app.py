@@ -2351,10 +2351,10 @@ def page_admin_settings(current_staff):
 
 
 # =========================
-# 【修正】メイン制御
+# 【修正】メイン制御（重複を除去した決定版）
 # =========================
 def main():
-    # 簡易パスワード
+    # 1. 簡易パスワード認証
     if "authenticated" not in st.session_state:
         st.title("🔐 " + APP_TITLE)
         pw = st.text_input("Password", type="password")
@@ -2362,32 +2362,42 @@ def main():
             if pw == ADMIN_PASSWORD:
                 st.session_state.authenticated = True
                 st.rerun()
-            else: st.error("Wrong password")
+            else:
+                st.error("Wrong password")
         return
 
-    # --- ログイン後の画面 ---
-    # サイドバーにログアウトボタンを配置
+    # 2. ログイン後のサイドバー共通表示
+    st.sidebar.title("🍷 TSCTメニュー")
+    
+    # ログアウトボタン
     if st.sidebar.button("🔓 ログアウト"):
         del st.session_state.authenticated
         st.rerun()
 
-    st.sidebar.title("🍷 TSCTメニュー")
-    staff_name = st.sidebar.selectbox("スタッフ選択", STAFF_DF["name"].tolist())
-    # ...（以下、現在のコードと同じ）
     # スタッフ選択
-    st.sidebar.title("🍷 TSCTメニュー")
     staff_name = st.sidebar.selectbox("スタッフ選択", STAFF_DF["name"].tolist())
     current_staff = get_staff_by_name(staff_name)
+    st.sidebar.write(f"ログイン中: {current_staff['role']}")
 
-    page = st.sidebar.radio("機能を選択", ("シフトカレンダー", "シフト希望入力", "自動シフト提案", "タイムカード", "連絡ボード", "管理者設定"))
+    # 3. ページ切り替えメニュー
+    page = st.sidebar.radio(
+        "機能を選択", 
+        ("シフトカレンダー", "シフト希望入力", "自動シフト提案", "タイムカード", "連絡ボード", "管理者設定")
+    )
 
-    if page == "シフトカレンダー": page_shift_calendar(current_staff)
-    elif page == "シフト希望入力": page_shift_request(current_staff)
-    elif page == "自動シフト提案": page_auto_scheduler(current_staff)
-    elif page == "タイムカード": page_timecard(current_staff)
-    elif page == "連絡ボード": page_message_board(current_staff)
-    elif page == "管理者設定": page_admin_settings(current_staff)
-
+    # 4. 各ページ関数の呼び出し
+    if page == "シフトカレンダー":
+        page_shift_calendar(current_staff)
+    elif page == "シフト希望入力":
+        page_shift_request(current_staff)
+    elif page == "自動シフト提案":
+        page_auto_scheduler(current_staff)
+    elif page == "タイムカード":
+        page_timecard(current_staff)
+    elif page == "連絡ボード":
+        page_message_board(current_staff)
+    elif page == "管理者設定":
+        page_admin_settings(current_staff)
 
 if __name__ == "__main__":
     main()
