@@ -9,77 +9,84 @@ import shutil
 import html
 from streamlit_gsheets import GSheetsConnection
 
-# =========================
-# 設定値
-# =========================
-APP_TITLE = "The Sake Council Tokyo シフト管理"
-ADMIN_PASSWORD = "TSCT2026"  # パスワードをここで定義
+# =========================================================
+# 1. ページ設定 (必ず最初に実行)
+# =========================================================
+APP_TITLE = "The Sake Council Tokyo 管理システム"
+st.set_page_config(page_title=APP_TITLE, layout="wide")
 
+# =========================================================
+# 2. 定数・設定値の定義 (エラー回避のため先行して定義)
+# =========================================================
+ADMIN_PASSWORD = "TSCT2026"
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
-# 曜日別の必要人数定数（エラー防止のためここで定義）
+# 曜日別の必要人数
 WEEKDAY_REQUIRED_STAFF = 5
 WEEKEND_REQUIRED_STAFF = 6
 REQUIRED_EMPLOYEES = 2
 
+# ファイルパス
 SHIFT_FILE = DATA_DIR / "shifts.csv"
 REQUEST_FILE = DATA_DIR / "shift_requests.csv"
 TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
 STAFF_FILE = "staff_master.csv"
 
-DEFAULT_OPEN_TIME = "17:00"
-DEFAULT_CLOSE_TIME = "24:00"
-
-# 列定義（これがないとロードエラーになります）
+# スタッフ情報の列定義
 STAFF_COLUMNS_BASE = ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income"]
 STAFF_EXTRA_COLUMNS = ["position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"]
 STAFF_COLUMNS = STAFF_COLUMNS_BASE + STAFF_EXTRA_COLUMNS
 
-# =========================
-# 【修正】3. GSheets連携
-# =========================
+# =========================================================
+# 3. 補助関数 (先行定義が必要なもの)
+# =========================================================
+def get_jp_holiday_name(date_obj: dt.date) -> str | None:
+    """日本の祝日名を返す。祝日でなければ None。"""
+    name = jpholiday.is_holiday_name(date_obj)
+    return name if name else None
+
+# =========================================================
+# 4. GSheets連携とデータ読み書き
+# =========================================================
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception:
     conn = None
 
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
+    """クラウド(GSheets)から優先読込。失敗時はローカル。"""
     sheet_name = path.stem
-    try:
-        # ttl=0 でキャッシュを無効化して常に最新を取得
-        df = conn.read(worksheet=sheet_name, ttl=0)
-        if df is None or df.empty:
-            raise ValueError("Sheet is empty")
-    except Exception:
-        if path.exists():
-            df = pd.read_csv(path)
-        else:
-            df = pd.DataFrame(columns=columns)
-            
-    # 指定したカラムが不足していたら追加
-    for c in columns:
-        if c not in df.columns:
-            df[c] = None
-    return df[columns]
+    if conn:
+        try:
+            df = conn.read(worksheet=sheet_name, ttl=0)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass
+    if path.exists():
+        return pd.read_csv(path)
+    return pd.DataFrame(columns=columns)
 
 def save_csv(df: pd.DataFrame, path: Path):
+    """ローカルとクラウドの両方に保存"""
     sheet_name = path.stem
     df.to_csv(path, index=False, encoding="utf-8-sig")
     if conn:
         try:
             conn.update(worksheet=sheet_name, data=df)
-            st.toast(f"クラウド({sheet_name})同期完了")
+            st.toast(f"クラウド({sheet_name})に同期しました")
         except Exception as e:
             st.error(f"クラウド保存失敗: {e}")
 
 # =========================================================
-# 【修正】4. スタッフマスタの初期化
+# 5. スタッフマスタの読み込み
 # =========================================================
 def load_staff_master() -> pd.DataFrame:
     df = load_csv(Path(STAFF_FILE), STAFF_COLUMNS)
     if df.empty:
+        # 初期サンプルデータ（店長）
         STAFF_MASTER = [("S001", "宮首（店長）", "社員", 1500, 5, 280000, "店長", None, None, 22, 0)]
         df = pd.DataFrame(STAFF_MASTER, columns=STAFF_COLUMNS)
         save_csv(df, Path(STAFF_FILE))
