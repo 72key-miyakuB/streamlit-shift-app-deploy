@@ -13,6 +13,7 @@ from streamlit_gsheets import GSheetsConnection
 # 【修正】1. 必ず最初に実行
 # =========================
 APP_TITLE = "The Sake Council Tokyo シフト管理システム"
+ADMIN_PASSWORD = "TSCT2026"  # ← これを追加
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # =========================
@@ -2350,13 +2351,10 @@ def page_admin_settings(current_staff):
 
 
 # =========================
-# メインアプリ
-# =========================
-# =========================
 # 【修正】メイン制御
 # =========================
 def main():
-    # 簡易パスワード（必要なら）
+    # 簡易パスワード
     if "authenticated" not in st.session_state:
         st.title("🔐 " + APP_TITLE)
         pw = st.text_input("Password", type="password")
@@ -2367,8 +2365,17 @@ def main():
             else: st.error("Wrong password")
         return
 
+    # --- ログイン後の画面 ---
+    # サイドバーにログアウトボタンを配置
+    if st.sidebar.button("🔓 ログアウト"):
+        del st.session_state.authenticated
+        st.rerun()
+
+    st.sidebar.title("🍷 TSCTメニュー")
+    staff_name = st.sidebar.selectbox("スタッフ選択", STAFF_DF["name"].tolist())
+    # ...（以下、現在のコードと同じ）
     # スタッフ選択
-    st.sidebar.title("🍷 酒公会メニュー")
+    st.sidebar.title("🍷 TSCTメニュー")
     staff_name = st.sidebar.selectbox("スタッフ選択", STAFF_DF["name"].tolist())
     current_staff = get_staff_by_name(staff_name)
 
