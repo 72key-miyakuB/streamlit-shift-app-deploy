@@ -1993,7 +1993,9 @@ def generate_new_staff_id(df: pd.DataFrame, role: str) -> str:
     return f"{prefix}{next_num:03d}"
 
 
+# =========================
 def page_admin_settings(current_staff):
+    # 【修正箇所】関数の最初でglobal宣言を行う（必須）
     global STAFF_DF
 
     st.header("⚙️ 管理者設定")
@@ -2002,6 +2004,7 @@ def page_admin_settings(current_staff):
         st.warning("管理者設定は社員のみ利用できます。")
         return
 
+    # 現在のデータをコピーして編集用にする
     staff_df = STAFF_DF.copy()
 
     # 必要な列がなければデフォルト値で埋める
@@ -2239,20 +2242,10 @@ def page_admin_settings(current_staff):
             new_staff_df.at[idx, "desired_shifts_per_month"] = int(cfg["month_cap"])
             new_staff_df.at[idx, "desired_monthly_income"] = int(cfg["income"])
 
-            # 固定休の反映
-            if cfg["role"] == "社員":
-                l1, l2 = cfg["dayoff1_label"], cfg["dayoff2_label"]
-                new_staff_df.at[idx, "dayoff1"] = weekday_label_to_value[l1] if l1 in weekday_label_to_value else pd.NA
-                new_staff_df.at[idx, "dayoff2"] = weekday_label_to_value[l2] if l2 in weekday_label_to_value else pd.NA
-            else:
-                new_staff_df.at[idx, "dayoff1"] = pd.NA
-                new_staff_df.at[idx, "dayoff2"] = pd.NA
-
-            # 【重要】クラウドとローカル両方に保存する関数を呼ぶ
+            # クラウド(GSheets)とローカル(CSV)の両方に保存
             save_csv(new_staff_df, STAFF_FILE)
             
-            # グローバル変数も更新
-            global STAFF_DF
+            # グローバル変数(アプリ全体のデータ)を最新に差し替え
             STAFF_DF = new_staff_df
             
             st.success("スタッフ情報を保存し、Google Sheetsと同期しました。")
