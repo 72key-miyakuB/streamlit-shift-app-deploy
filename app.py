@@ -9,15 +9,15 @@ import shutil
 import html
 from streamlit_gsheets import GSheetsConnection
 
-# =========================================================
-# 【修正】1. エラー回避のため、必ず最初にPage Configを実行
-# =========================================================
-APP_TITLE = "The Sake Council Tokyo 管理システム"
+# =========================
+# 【修正】1. 必ず最初に実行
+# =========================
+APP_TITLE = "The Sake Council Tokyo シフト管理システム"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-# =========================================================
-# 【修正】2. 設定値と列定義を先行して行う
-# =========================================================
+# =========================
+# 【修正】2. 設定値と列定義
+# =========================
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -27,14 +27,14 @@ TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
 STAFF_FILE = "staff_master.csv"
 
-# スタッフ情報の列定義（これが必要）
+# 列定義（これがないとロードエラーになります）
 STAFF_COLUMNS_BASE = ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income"]
 STAFF_EXTRA_COLUMNS = ["position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"]
 STAFF_COLUMNS = STAFF_COLUMNS_BASE + STAFF_EXTRA_COLUMNS
 
-# =========================================================
-# 【修正】3. GSheets連携と共通ユーティリティ
-# =========================================================
+# =========================
+# 【修正】3. GSheets連携
+# =========================
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception:
@@ -58,7 +58,7 @@ def save_csv(df: pd.DataFrame, path: Path):
     if conn:
         try:
             conn.update(worksheet=sheet_name, data=df)
-            st.toast(f"クラウド({sheet_name})に同期しました")
+            st.toast(f"クラウド({sheet_name})同期完了")
         except Exception as e:
             st.error(f"クラウド保存失敗: {e}")
 
@@ -525,17 +525,15 @@ def get_default_year_month_for_ui() -> tuple[int, int]:
 def page_shift_calendar(current_staff):
     st.header("📅 シフト確認カレンダー")
 
-    # シフトデータ読み込み
-    shifts_df = load_csv(
-        SHIFT_FILE,
-        ["date", "staff_id", "start_time", "end_time", "source"],
-    )
+# --- 【修正箇所】必要なカラムをすべて指定して読み込む ---
+    # シフト本体（給与計算済みのデータも含むためカラムを追加）
+    shift_cols = ["date", "staff_id", "start_time", "end_time", "source", "hours", "late_hours", "pay"]
+    shifts_df = load_csv(SHIFT_FILE, shift_cols)
 
-    # ★ シフト希望/NGデータ読み込み
-    requests_df = load_csv(
-        REQUEST_FILE,
-        ["date", "staff_id", "request_type", "start_time", "end_time", "note"],
-    )
+    # シフト希望/NGデータ（一意なIDを含めて読み込む）
+    req_cols = ["request_id", "date", "staff_id", "request_type", "start_time", "end_time", "note"]
+    requests_df = load_csv(REQUEST_FILE, req_cols)
+    # --------------------------------------------------
 
     # 月選択
     today = dt.date.today()
@@ -2354,44 +2352,34 @@ def page_admin_settings(current_staff):
 # =========================
 # メインアプリ
 # =========================
+# =========================
+# 【修正】メイン制御
+# =========================
 def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    # 簡易パスワード（必要なら）
+    if "authenticated" not in st.session_state:
+        st.title("🔐 " + APP_TITLE)
+        pw = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if pw == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else: st.error("Wrong password")
+        return
 
-    st.title(APP_TITLE)
-
-    # --- ログイン的なスタッフ選択 ---
-    st.sidebar.header("ログイン")
-    staff_name = st.sidebar.selectbox("ログイン中スタッフを選択", STAFF_DF["name"].tolist())
+    # スタッフ選択
+    st.sidebar.title("🍷 酒公会メニュー")
+    staff_name = st.sidebar.selectbox("スタッフ選択", STAFF_DF["name"].tolist())
     current_staff = get_staff_by_name(staff_name)
 
-    st.sidebar.write(f"役割: {current_staff['role']}")
+    page = st.sidebar.radio("機能を選択", ("シフトカレンダー", "シフト希望入力", "自動シフト提案", "タイムカード", "連絡ボード", "管理者設定"))
 
-    # --- ページ選択 ---
-    st.sidebar.header("メニュー")
-    page = st.sidebar.radio(
-        "ページを選択",
-        (
-            "シフトカレンダー",
-            "シフト希望入力",
-            "自動シフト提案",
-            "タイムカード",
-            "連絡ボード",
-            "管理者設定",
-        ),
-    )
-
-    if page == "シフトカレンダー":
-        page_shift_calendar(current_staff)
-    elif page == "シフト希望入力":
-        page_shift_request(current_staff)
-    elif page == "自動シフト提案":
-        page_auto_scheduler(current_staff)
-    elif page == "タイムカード":
-        page_timecard(current_staff)
-    elif page == "連絡ボード":
-        page_message_board(current_staff)
-    elif page == "管理者設定":
-        page_admin_settings(current_staff)
+    if page == "シフトカレンダー": page_shift_calendar(current_staff)
+    elif page == "シフト希望入力": page_shift_request(current_staff)
+    elif page == "自動シフト提案": page_auto_scheduler(current_staff)
+    elif page == "タイムカード": page_timecard(current_staff)
+    elif page == "連絡ボード": page_message_board(current_staff)
+    elif page == "管理者設定": page_admin_settings(current_staff)
 
 
 if __name__ == "__main__":
