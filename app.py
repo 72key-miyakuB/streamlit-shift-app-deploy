@@ -2225,22 +2225,36 @@ def page_admin_settings(current_staff):
             }
 
     if st.button("スタッフ編集内容を保存"):
-        for idx, row in staff_df.iterrows():
+        # セッションから編集内容を反映
+        new_staff_df = staff_df.copy()
+        for idx, row in new_staff_df.iterrows():
             staff_id = row["staff_id"]
             cfg = st.session_state.get(f"cfg_staff_{staff_id}")
             if not cfg: continue
 
-            # 各値を反映
-            staff_df.at[idx, "name"] = cfg["name"]
-            staff_df.at[idx, "role"] = cfg["role"]
-            staff_df.at[idx, "position"] = cfg["position"]
-            staff_df.at[idx, "hourly_wage"] = cfg["hourly_wage"]
-            staff_df.at[idx, "desired_shifts_per_month"] = int(cfg["month_cap"])
-            staff_df.at[idx, "desired_monthly_income"] = int(cfg["income"])
-            # ...固定休の反映処理など...
+            new_staff_df.at[idx, "name"] = cfg["name"]
+            new_staff_df.at[idx, "role"] = cfg["role"]
+            new_staff_df.at[idx, "position"] = cfg["position"]
+            new_staff_df.at[idx, "hourly_wage"] = int(cfg["hourly_wage"])
+            new_staff_df.at[idx, "desired_shifts_per_month"] = int(cfg["month_cap"])
+            new_staff_df.at[idx, "desired_monthly_income"] = int(cfg["income"])
 
-            # 【ここが修正ポイント】
-            save_csv(staff_df, STAFF_FILE) 
+            # 固定休の反映
+            if cfg["role"] == "社員":
+                l1, l2 = cfg["dayoff1_label"], cfg["dayoff2_label"]
+                new_staff_df.at[idx, "dayoff1"] = weekday_label_to_value[l1] if l1 in weekday_label_to_value else pd.NA
+                new_staff_df.at[idx, "dayoff2"] = weekday_label_to_value[l2] if l2 in weekday_label_to_value else pd.NA
+            else:
+                new_staff_df.at[idx, "dayoff1"] = pd.NA
+                new_staff_df.at[idx, "dayoff2"] = pd.NA
+
+            # 【重要】クラウドとローカル両方に保存する関数を呼ぶ
+            save_csv(new_staff_df, STAFF_FILE)
+            
+            # グローバル変数も更新
+            global STAFF_DF
+            STAFF_DF = new_staff_df
+            
             st.success("スタッフ情報を保存し、Google Sheetsと同期しました。")
             st.rerun()
 
