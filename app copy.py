@@ -7,7 +7,6 @@ import jpholiday  # 追加
 import os
 import shutil
 import html  # ファイルの先頭あたりで一度だけ
-from streamlit_gsheets import GSheetsConnection  # これを追加
 
 # =========================
 # バックアップ関連
@@ -200,42 +199,21 @@ def ensure_request_ids(requests_df: pd.DataFrame) -> pd.DataFrame:
 # =========================
 # 共通ユーティリティ
 # =========================
-# 接続の確立
-conn = st.connection("gsheets", type=GSheetsConnection)
-
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
-    """スプレッドシートから読み込み。失敗したらCSV、それでもなければ空を返す。"""
-    sheet_name = path.stem  # ファイル名(shifts等)をシート名として使用
-    
-    try:
-        # Googleシートから読み込み
-        df = conn.read(worksheet=sheet_name, ttl=0) # ttl=0で常に最新を取得
-    except Exception:
-        # シートがない、または接続エラーの場合はローカルCSV
-        if path.exists():
-            df = pd.read_csv(path)
-        else:
-            df = pd.DataFrame(columns=columns)
-            
-    # カラムの整合性チェック
+    """CSV を読み込み。なければ空データフレームを返す。"""
+    if path.exists():
+        df = pd.read_csv(path)
+    else:
+        df = pd.DataFrame(columns=columns)
+    # 必要なカラムが足りなければ追加
     for c in columns:
         if c not in df.columns:
             df[c] = None
     return df[columns]
 
+
 def save_csv(df: pd.DataFrame, path: Path):
-    """CSVとGoogleスプレッドシートの両方に保存する"""
-    sheet_name = path.stem
-    
-    # ローカルCSVに保存
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-    
-    # Googleスプレッドシートに保存
-    try:
-        conn.update(worksheet=sheet_name, data=df)
-        st.toast(f"クラウド({sheet_name})に同期しました")
-    except Exception as e:
-        st.error(f"クラウド保存に失敗しました。ローカルのみ更新されます: {e}")
+    df.to_csv(path, index=False)
 
 
 def get_staff_by_name(name: str) -> pd.Series:
@@ -1889,112 +1867,93 @@ def page_auto_scheduler(current_staff):
 
 
 # =========================
-# タイムカード（給与計算・休憩・深夜手当対応版）
+# タイムカード
 # =========================
 def page_timecard(current_staff):
     st.header("⏱ タイムカード")
 
-    # データ読み込み（スプレッドシート/CSV）
     timecards_df = load_csv(
         TIMECARD_FILE,
-        ["date", "staff_id", "clock_in", "clock_out", "hours", "late_hours", "pay"],
+        ["date", "staff_id", "clock_in", "clock_out", "hours"],
     )
 
-    today = dt.date.today().strftime("%Y-%m-%d")
+    today = dt.date.today()
     now = dt.datetime.now()
-    sid = str(current_staff["staff_id"])
 
     # 今日のレコードを探す
+    key = (today.strftime("%Y-%m-%d"), current_staff["staff_id"])
     existing_today = timecards_df[
-        (timecards_df["date"] == today) & (timecards_df["staff_id"] == sid)
+        (timecards_df["date"] == key[0])
+        & (timecards_df["staff_id"] == key[1])
     ]
 
     st.subheader("本日の打刻")
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("出勤", use_container_width=True):
-            if existing_today.empty:
+        if st.button("出勤"):
+            if len(existing_today) == 0:
                 new_row = {
-                    "date": today,
-                    "staff_id": sid,
+                    "date": key[0],
+                    "staff_id": key[1],
                     "clock_in": now.strftime("%H:%M:%S"),
                     "clock_out": None,
                     "hours": 0.0,
-                    "late_hours": 0.0,
-                    "pay": 0
                 }
-                timecards_df = pd.concat([timecards_df, pd.DataFrame([new_row])], ignore_index=True)
+                timecards_df = pd.concat(
+                    [timecards_df, pd.DataFrame([new_row])],
+                    ignore_index=True,
+                )
                 save_csv(timecards_df, TIMECARD_FILE)
                 st.success("出勤打刻しました。")
-                st.rerun()
             else:
-                st.warning("本日のレコードは既に存在します。")
+                st.warning("本日のレコードは既に存在します。修正は管理者に依頼してください。")
 
     with col2:
-        if st.button("退勤", use_container_width=True):
-            if existing_today.empty:
-                st.warning("出勤打刻がありません。")
+        if st.button("退勤"):
+            if len(existing_today) == 0:
+                st.warning("出勤打刻がありません。先に出勤を押してください。")
             else:
                 idx = existing_today.index[0]
+                # すでに退勤済みなら上書きしない（簡易実装）
                 if pd.notna(timecards_df.loc[idx, "clock_out"]):
                     st.warning("既に退勤済みです。")
                 else:
-                    clock_in_str = timecards_df.loc[idx, "clock_in"]
-                    clock_out_str = now.strftime("%H:%M:%S")
-                    
-                    # --- 給与・時間計算ロジック ---
-                    fmt = "%H:%M:%S"
-                    start_t = dt.datetime.strptime(clock_in_str, fmt)
-                    end_t = dt.datetime.strptime(clock_out_str, fmt)
-                    if end_t < start_t: end_t += dt.timedelta(days=1) # 日またぎ対応
-                    
-                    total_duration_h = (end_t - start_t).total_seconds() / 3600
-                    
-                    # 1. 休憩控除（6h超で45分、8h超で1時間）
-                    break_h = 1.0 if total_duration_h > 8 else (0.75 if total_duration_h > 6 else 0.0)
-                    net_hours = max(0, total_duration_h - break_h)
-                    
-                    # 2. 深夜時間計算（22:00〜05:00）
-                    # 簡易的に22時以降の勤務を算出
-                    limit_22 = start_t.replace(hour=22, minute=0, second=0)
-                    late_h = max(0, (end_t - max(start_t, limit_22)).total_seconds() / 3600) if end_t > limit_22 else 0
-                    
-                    # 3. 金額計算（深夜分は25%増）
-                    hourly = int(current_staff["hourly_wage"])
-                    transport = int(current_staff.get("transport_daily", 0)) # 交通費設定があれば加算
-                    
-                    base_pay = net_hours * hourly
-                    late_premium = late_h * hourly * 0.25
-                    total_pay = int(base_pay + late_premium + transport)
-                    
-                    # 保存処理
-                    timecards_df.loc[idx, "clock_out"] = clock_out_str
-                    timecards_df.loc[idx, "hours"] = round(net_hours, 2)
-                    timecards_df.loc[idx, "late_hours"] = round(late_h, 2)
-                    timecards_df.loc[idx, "pay"] = total_pay
-                    
+                    timecards_df.loc[idx, "clock_out"] = now.strftime("%H:%M:%S")
+                    # 時間計算
+                    try:
+                        start = dt.datetime.strptime(
+                            timecards_df.loc[idx, "clock_in"], "%H:%M:%S"
+                        )
+                        end = dt.datetime.strptime(
+                            timecards_df.loc[idx, "clock_out"], "%H:%M:%S"
+                        )
+                        diff = (end - start).total_seconds() / 3600
+                    except Exception:
+                        diff = 0.0
+                    timecards_df.loc[idx, "hours"] = round(diff, 2)
                     save_csv(timecards_df, TIMECARD_FILE)
-                    st.success(f"退勤完了: 実働 {round(net_hours, 2)}h (深夜 {round(late_h, 2)}h) 給与 {total_pay:,}円")
-                    st.rerun()
+                    st.success(f"退勤打刻しました。 本日の実働時間: {round(diff, 2)} 時間")
 
     st.markdown("---")
-    st.subheader("自分の勤怠・給与履歴")
+    st.subheader("自分の勤怠履歴")
 
-    my_records = timecards_df[timecards_df["staff_id"] == sid].copy()
-    if my_records.empty:
-        st.info("履歴がまだありません。")
+    my_records = timecards_df[timecards_df["staff_id"] == current_staff["staff_id"]]
+    if len(my_records) == 0:
+        st.info("勤怠履歴がまだありません。")
     else:
         my_records = my_records.sort_values("date", ascending=False)
-        # 見やすくリネーム
-        display_df = my_records.rename(columns={
-            "date": "日付", "clock_in": "出勤", "clock_out": "退勤", 
-            "hours": "実働(h)", "late_hours": "深夜(h)", "pay": "概算給与"
-        })
-        st.dataframe(display_df, use_container_width=True)
 
-        total_pay = my_records["pay"].sum()
-        st.metric("今月の総支給額（概算）", f"{int(total_pay):,} 円")
+        # 給与概算を計算
+        hourly = current_staff["hourly_wage"]
+        my_records["pay_estimate"] = my_records["hours"].astype(float) * hourly
+
+        st.dataframe(my_records, use_container_width=True)
+
+        total_hours = my_records["hours"].astype(float).sum()
+        total_pay = my_records["pay_estimate"].sum()
+        st.metric("合計実働時間", f"{total_hours:.2f} 時間")
+        st.metric("概算支給額", f"{int(total_pay):,} 円")
 
 
 # =========================
