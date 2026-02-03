@@ -10,45 +10,38 @@ import html
 from streamlit_gsheets import GSheetsConnection
 
 # =========================================================
-# 1. ページ設定 (必ず最初に実行)
+# 1. ページ設定と定数定義（エラー回避のため最優先で実行）
 # =========================================================
 APP_TITLE = "The Sake Council Tokyo 管理システム"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-# =========================================================
-# 2. 定数・設定値の定義 (エラー回避のため先行して定義)
-# =========================================================
 ADMIN_PASSWORD = "TSCT2026"
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
-
-# 曜日別の必要人数
+DEFAULT_OPEN_TIME = "17:00"
+DEFAULT_CLOSE_TIME = "24:00"
 WEEKDAY_REQUIRED_STAFF = 5
 WEEKEND_REQUIRED_STAFF = 6
 REQUIRED_EMPLOYEES = 2
 
-# ファイルパス
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+# 各ファイルと列定義の紐付け
+FILE_SCHEMA = {
+    "staff_master": ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income", "position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"],
+    "shifts": ["date", "staff_id", "start_time", "end_time", "source", "hours", "late_hours", "pay"],
+    "shift_requests": ["request_id", "date", "staff_id", "request_type", "start_time", "end_time", "note"],
+    "timecards": ["date", "staff_id", "clock_in", "clock_out", "hours", "late_hours", "pay"],
+    "messages": ["timestamp", "from_staff_id", "to_staff_id", "category", "message"]
+}
+
+STAFF_FILE = "staff_master.csv"
 SHIFT_FILE = DATA_DIR / "shifts.csv"
 REQUEST_FILE = DATA_DIR / "shift_requests.csv"
 TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
-STAFF_FILE = "staff_master.csv"
-
-# スタッフ情報の列定義
-STAFF_COLUMNS_BASE = ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income"]
-STAFF_EXTRA_COLUMNS = ["position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"]
-STAFF_COLUMNS = STAFF_COLUMNS_BASE + STAFF_EXTRA_COLUMNS
 
 # =========================================================
-# 3. 補助関数 (先行定義が必要なもの)
-# =========================================================
-def get_jp_holiday_name(date_obj: dt.date) -> str | None:
-    """日本の祝日名を返す。祝日でなければ None。"""
-    name = jpholiday.is_holiday_name(date_obj)
-    return name if name else None
-
-# =========================================================
-# 4. GSheets連携とデータ読み書き
+# 2. GSheets連携エンジン
 # =========================================================
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
@@ -56,39 +49,48 @@ except Exception:
     conn = None
 
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
-    """クラウド(GSheets)から優先読込。失敗時はローカル。"""
+    """クラウド優先で読込。必ず指定されたカラムを保証する。"""
     sheet_name = path.stem
+    df = None
     if conn:
         try:
             df = conn.read(worksheet=sheet_name, ttl=0)
-            if df is not None and not df.empty:
-                return df
         except Exception:
             pass
-    if path.exists():
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=columns)
+    
+    if df is None or df.empty:
+        if path.exists():
+            df = pd.read_csv(path)
+        else:
+            df = pd.DataFrame(columns=columns)
+            
+    # 【重要】不足している列を自動補完（KeyError: 'pay' 回避）
+    for col in columns:
+        if col not in df.columns:
+            df[col] = 0 if col in ["pay", "hours", "late_hours"] else None
+    return df[columns]
 
 def save_csv(df: pd.DataFrame, path: Path):
-    """ローカルとクラウドの両方に保存"""
+    """保存処理"""
     sheet_name = path.stem
     df.to_csv(path, index=False, encoding="utf-8-sig")
     if conn:
         try:
             conn.update(worksheet=sheet_name, data=df)
-            st.toast(f"クラウド({sheet_name})に同期しました")
+            st.toast(f"Synced: {sheet_name}")
         except Exception as e:
-            st.error(f"クラウド保存失敗: {e}")
+            # 認証エラー時は警告のみ出す
+            if "Service Account" in str(e):
+                st.error("【要設定】スプレッドシートへの書込権限がありません。Secretsの設定を確認してください。")
+            else:
+                st.error(f"保存失敗: {e}")
 
-# =========================================================
-# 5. スタッフマスタの読み込み
-# =========================================================
+# 初期化
 def load_staff_master() -> pd.DataFrame:
-    df = load_csv(Path(STAFF_FILE), STAFF_COLUMNS)
+    df = load_csv(Path(STAFF_FILE), FILE_SCHEMA["staff_master"])
     if df.empty:
-        # 初期サンプルデータ（店長）
         STAFF_MASTER = [("S001", "宮首（店長）", "社員", 1500, 5, 280000, "店長", None, None, 22, 0)]
-        df = pd.DataFrame(STAFF_MASTER, columns=STAFF_COLUMNS)
+        df = pd.DataFrame(STAFF_MASTER, columns=FILE_SCHEMA["staff_master"])
         save_csv(df, Path(STAFF_FILE))
     return df
 
