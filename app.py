@@ -40,7 +40,7 @@ FILE_SCHEMA = {
     "messages": ["timestamp", "from_staff_id", "to_staff_id", "category", "message"]
 }
 
-STAFF_FILE = "staff_master.csv"
+STAFF_FILE = DATA_DIR / "staff_master.csv"
 SHIFT_FILE = DATA_DIR / "shifts.csv"
 REQUEST_FILE = DATA_DIR / "shift_requests.csv"
 TIMECARD_FILE = DATA_DIR / "timecards.csv"
@@ -2228,13 +2228,21 @@ def page_admin_settings(current_staff):
         for idx, row in staff_df.iterrows():
             staff_id = row["staff_id"]
             cfg = st.session_state.get(f"cfg_staff_{staff_id}")
-            if not cfg:
-                continue
+            if not cfg: continue
 
+            # 各値を反映
             staff_df.at[idx, "name"] = cfg["name"]
             staff_df.at[idx, "role"] = cfg["role"]
             staff_df.at[idx, "position"] = cfg["position"]
             staff_df.at[idx, "hourly_wage"] = cfg["hourly_wage"]
+            staff_df.at[idx, "desired_shifts_per_month"] = int(cfg["month_cap"])
+            staff_df.at[idx, "desired_monthly_income"] = int(cfg["income"])
+            # ...固定休の反映処理など...
+
+            # 【ここが修正ポイント】
+            save_csv(staff_df, STAFF_FILE) 
+            st.success("スタッフ情報を保存し、Google Sheetsと同期しました。")
+            st.rerun()
 
             # 月あたり最大シフト回数を本命として保存
             month_cap = int(cfg["month_cap"])
@@ -2259,9 +2267,11 @@ def page_admin_settings(current_staff):
                 staff_df.at[idx, "dayoff1"] = pd.NA
                 staff_df.at[idx, "dayoff2"] = pd.NA
 
-        staff_df.to_csv(STAFF_FILE, index=False, encoding="utf-8-sig")
-        STAFF_DF = staff_df
-        st.success("スタッフ情報を保存しました。")
+        # 自作の save_csv 関数を使う（これで GSheets にも飛ぶ）
+        save_csv(staff_df, Path(STAFF_FILE))
+        # グローバル変数を更新
+        st.session_state["STAFF_DF"] = staff_df 
+        st.success("スタッフ情報を保存し、スプレッドシートと同期しました。")
 
     # ---------------- 新規スタッフ追加 ----------------
     st.markdown("---")
