@@ -10,23 +10,27 @@ import html
 from streamlit_gsheets import GSheetsConnection
 
 # =========================
-# 【修正】1. 必ず最初に実行
+# 設定値
 # =========================
-APP_TITLE = "The Sake Council Tokyo シフト管理システム"
-ADMIN_PASSWORD = "TSCT2026"  # ← これを追加
-st.set_page_config(page_title=APP_TITLE, layout="wide")
+APP_TITLE = "The Sake Council Tokyo シフト管理"
+ADMIN_PASSWORD = "TSCT2026"  # パスワードをここで定義
 
-# =========================
-# 【修正】2. 設定値と列定義
-# =========================
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
+
+# 曜日別の必要人数定数（エラー防止のためここで定義）
+WEEKDAY_REQUIRED_STAFF = 5
+WEEKEND_REQUIRED_STAFF = 6
+REQUIRED_EMPLOYEES = 2
 
 SHIFT_FILE = DATA_DIR / "shifts.csv"
 REQUEST_FILE = DATA_DIR / "shift_requests.csv"
 TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
 STAFF_FILE = "staff_master.csv"
+
+DEFAULT_OPEN_TIME = "17:00"
+DEFAULT_CLOSE_TIME = "24:00"
 
 # 列定義（これがないとロードエラーになります）
 STAFF_COLUMNS_BASE = ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income"]
@@ -43,15 +47,22 @@ except Exception:
 
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
     sheet_name = path.stem
-    if conn:
-        try:
-            df = conn.read(worksheet=sheet_name, ttl=0)
-            return df
-        except Exception:
-            pass
-    if path.exists():
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=columns)
+    try:
+        # ttl=0 でキャッシュを無効化して常に最新を取得
+        df = conn.read(worksheet=sheet_name, ttl=0)
+        if df is None or df.empty:
+            raise ValueError("Sheet is empty")
+    except Exception:
+        if path.exists():
+            df = pd.read_csv(path)
+        else:
+            df = pd.DataFrame(columns=columns)
+            
+    # 指定したカラムが不足していたら追加
+    for c in columns:
+        if c not in df.columns:
+            df[c] = None
+    return df[columns]
 
 def save_csv(df: pd.DataFrame, path: Path):
     sheet_name = path.stem
@@ -630,8 +641,9 @@ def page_shift_calendar(current_staff):
             }
         )
 
+# 一覧表示のデータフレームを表示する際、一意のキーを持たせる
     st.subheader("一覧表示")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, key=f"df_list_{year}_{month}")
 
     # ----- 月間カレンダー（マス表示） -----
     st.markdown("---")
