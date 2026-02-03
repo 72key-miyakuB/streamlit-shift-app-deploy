@@ -3,65 +3,21 @@ import pandas as pd
 import datetime as dt
 import calendar
 from pathlib import Path
-import jpholiday  # 追加
+import jpholiday
 import os
 import shutil
-import html  # ファイルの先頭あたりで一度だけ
-from streamlit_gsheets import GSheetsConnection  # これを追加
+import html
+from streamlit_gsheets import GSheetsConnection
 
-# =========================
-# バックアップ関連
-# =========================
-BACKUP_DIR = "backups"  # アプリと同じフォルダ直下に作る
+# =========================================================
+# 【修正】1. エラー回避のため、必ず最初にPage Configを実行
+# =========================================================
+APP_TITLE = "The Sake Council Tokyo 管理システム"
+st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-def backup_all_data():
-    """
-    主要なCSVをまとめてバックアップする。
-    backups/YYYYMMDD_HHMMSS/ の下にコピーを作成して、保存先パスとコピー数を返す。
-    """
-
-    # ★ 必要に応じてここに追加したいファイルを増やしてください
-    file_map = {
-        "staff_master": STAFF_FILE,   # staff_master.csv
-        "shifts": SHIFT_FILE,         # シフト本体
-        "requests": REQUEST_FILE,     # 希望/NG
-        # "timecard": TIMECARD_FILE,  # 将来タイムカードCSVを作ったらここに追加
-    }
-
-    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest_dir = os.path.join(BACKUP_DIR, ts)
-
-    os.makedirs(dest_dir, exist_ok=True)
-
-    copied_files = []
-
-    for label, src in file_map.items():
-        if src is None:
-            continue
-        if not os.path.exists(src):
-            # まだファイルが無いものはスキップ
-            continue
-
-        dst = os.path.join(dest_dir, f"{label}.csv")
-        shutil.copy2(src, dst)
-        copied_files.append(dst)
-
-    return dest_dir, copied_files
-
-# =========================
-# 祝日設定
-# =========================
-def get_jp_holiday_name(date_obj: dt.date) -> str | None:
-    """
-    日本の祝日名を返すヘルパー。祝日でなければ None。
-    """
-    name = jpholiday.is_holiday_name(date_obj)
-    return name if name else None
-
-# =========================
-# 設定値（後で外出し可能）
-# =========================
-APP_TITLE = "The Sake Council Tokyo シフト管理"
+# =========================================================
+# 【修正】2. 設定値と列定義を先行して行う
+# =========================================================
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -69,104 +25,55 @@ SHIFT_FILE = DATA_DIR / "shifts.csv"
 REQUEST_FILE = DATA_DIR / "shift_requests.csv"
 TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
+STAFF_FILE = "staff_master.csv"
 
-# 営業時間（デフォルト）※後で設定画面から変更できるように拡張
-DEFAULT_OPEN_TIME = "17:00"
-DEFAULT_CLOSE_TIME = "24:00"
-
-# 平日・週末の必要人数
-WEEKDAY_REQUIRED_STAFF = 5
-WEEKEND_REQUIRED_STAFF = 6
-REQUIRED_EMPLOYEES = 2  # 社員の最低人数
-
-# =========================
-# スタッフマスタ
-# 1回目起動時だけ CSV を自動生成、それ以降は CSV を優先
-# =========================
-STAFF_FILE = "staff_master.csv"  # shift_app.py と同じフォルダ想定
-
-# コード内の初期値（CSV がまだ無いとき用）
-STAFF_MASTER = [
-    # id, 名前, 役割, 時給, 週希望シフト回数, 月希望収入（目安）
-    ("S001", "宮首（店長）", "社員", 1500, 5, 280000),
-    ("S002", "山田（料理長）", "社員", 1500, 5, 280000),
-    ("S003", "佐藤（社員）", "社員", 1400, 5, 260000),
-    ("A001", "アルバイトA", "アルバイト", 1300, 3, 80000),
-    ("A002", "アルバイトB", "アルバイト", 1300, 3, 80000),
-    ("A003", "アルバイトC", "アルバイト", 1300, 3, 80000),
-    ("A004", "アルバイトD", "アルバイト", 1300, 3, 80000),
-    ("A005", "アルバイトE", "アルバイト", 1300, 3, 80000),
-    ("A006", "アルバイトF", "アルバイト", 1300, 3, 80000),
-    ("A007", "アルバイトG", "アルバイト", 1300, 3, 80000),
-    ("A008", "アルバイトH", "アルバイト", 1300, 3, 80000),
-    ("A009", "アルバイトI", "アルバイト", 1300, 3, 80000),
-    ("A010", "アルバイトJ", "アルバイト", 1300, 3, 80000),
-]
-
-# 列定義を確定
+# スタッフ情報の列定義（これが必要）
 STAFF_COLUMNS_BASE = ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income"]
 STAFF_EXTRA_COLUMNS = ["position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"]
 STAFF_COLUMNS = STAFF_COLUMNS_BASE + STAFF_EXTRA_COLUMNS
 
-# 接続の確立
+# =========================================================
+# 【修正】3. GSheets連携と共通ユーティリティ
+# =========================================================
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-except:
+except Exception:
     conn = None
 
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
     sheet_name = path.stem
-    try:
-        df = conn.read(worksheet=sheet_name, ttl=0)
-    except:
-        if path.exists():
-            df = pd.read_csv(path)
-        else:
-            df = pd.DataFrame(columns=columns)
-    for c in columns:
-        if c not in df.columns:
-            df[c] = None
-    return df[columns]
+    if conn:
+        try:
+            df = conn.read(worksheet=sheet_name, ttl=0)
+            return df
+        except Exception:
+            pass
+    if path.exists():
+        return pd.read_csv(path)
+    return pd.DataFrame(columns=columns)
 
 def save_csv(df: pd.DataFrame, path: Path):
     sheet_name = path.stem
     df.to_csv(path, index=False, encoding="utf-8-sig")
-    try:
-        conn.update(worksheet=sheet_name, data=df)
-        st.toast(f"Synced: {sheet_name}")
-    except Exception as e:
-        st.error(f"Cloud Save Error: {e}")
+    if conn:
+        try:
+            conn.update(worksheet=sheet_name, data=df)
+            st.toast(f"クラウド({sheet_name})に同期しました")
+        except Exception as e:
+            st.error(f"クラウド保存失敗: {e}")
 
+# =========================================================
+# 【修正】4. スタッフマスタの初期化
+# =========================================================
 def load_staff_master() -> pd.DataFrame:
-    """
-    staff_master.csv があればそれを読む。
-    まだ無ければコード内の STAFF_MASTER から作って保存。
-    不足列があれば自動で追加。
-    """
-    if os.path.exists(STAFF_FILE):
-        df = pd.read_csv(STAFF_FILE)
-    else:
-        # まずベース列だけで DataFrame 化
-        df = pd.DataFrame(STAFF_MASTER, columns=STAFF_COLUMNS_BASE)
-        # 後で保存するときに全列揃えて書き出す
-        for col in STAFF_EXTRA_COLUMNS:
-            if col not in df.columns:
-                df[col] = pd.NA
-        df.to_csv(STAFF_FILE, index=False, encoding="utf-8-sig")
-
-    # 既存 CSV に足りない列があれば埋める（後方互換）
-    for col in STAFF_COLUMNS:
-        if col not in df.columns:
-            df[col] = pd.NA
-
+    df = load_csv(Path(STAFF_FILE), STAFF_COLUMNS)
+    if df.empty:
+        STAFF_MASTER = [("S001", "宮首（店長）", "社員", 1500, 5, 280000, "店長", None, None, 22, 0)]
+        df = pd.DataFrame(STAFF_MASTER, columns=STAFF_COLUMNS)
+        save_csv(df, Path(STAFF_FILE))
     return df
 
-
 STAFF_DF = load_staff_master()
-
-# ---- 安全策：古いstaff_masterに desired_shifts_per_month が無い場合に備える ----
-if "desired_shifts_per_month" not in STAFF_DF.columns:
-    STAFF_DF["desired_shifts_per_month"] = None  # または 0 でもOK
 
 
 def get_staff_name(staff_id: str) -> str:
