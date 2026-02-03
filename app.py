@@ -10,7 +10,7 @@ import html
 from streamlit_gsheets import GSheetsConnection
 
 # =========================================================
-# 1. ページ設定と定数定義（エラー回避のため最優先で実行）
+# 1. ページ設定と定数定義（最優先実行）
 # =========================================================
 APP_TITLE = "The Sake Council Tokyo 管理システム"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -22,10 +22,16 @@ WEEKDAY_REQUIRED_STAFF = 5
 WEEKEND_REQUIRED_STAFF = 6
 REQUIRED_EMPLOYEES = 2
 
+# 【追加】祝日判定関数を読込より前に定義
+def get_jp_holiday_name(date_obj: dt.date) -> str | None:
+    if isinstance(date_obj, str):
+        date_obj = dt.datetime.strptime(date_obj, "%Y-%m-%d").date()
+    name = jpholiday.is_holiday_name(date_obj)
+    return name if name else None
+
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
-# 各ファイルと列定義の紐付け
 FILE_SCHEMA = {
     "staff_master": ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income", "position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"],
     "shifts": ["date", "staff_id", "start_time", "end_time", "source", "hours", "late_hours", "pay"],
@@ -41,24 +47,25 @@ TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
 
 # =========================================================
-# 2. GSheets連携エンジン (接続確認を強化)
+# 2. GSheets連携エンジン (秘密鍵の読み込みエラー対策版)
 # =========================================================
 def get_gsheets_connection():
     try:
         # Secretsから接続情報を読み込む
         return st.connection("gsheets", type=GSheetsConnection)
     except Exception as e:
-        # 接続できない場合、画面にエラーを表示させる
-        st.sidebar.error(f"GSheets接続エラー: {e}")
+        # 【修正点】Invalid PEMエラーが出た場合、より具体的な対策を表示
+        err_msg = str(e)
+        if "PEM" in err_msg or "InvalidData" in err_msg:
+            st.sidebar.error("Secretsのprivate_keyが不正です。ダブルクォーテーションで囲んでいるか確認してください。")
+        else:
+            st.sidebar.error(f"GSheets接続エラー: {e}")
         return None
 
 conn = get_gsheets_connection()
-
-# クラウドが生きているかチェックするフラグ
 IS_CLOUD_READY = conn is not None
 
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
-    """クラウド優先で読込。必ず指定されたカラムを保証する。"""
     sheet_name = path.stem
     df = None
     if conn:
@@ -66,14 +73,11 @@ def load_csv(path: Path, columns: list) -> pd.DataFrame:
             df = conn.read(worksheet=sheet_name, ttl=0)
         except Exception:
             pass
-    
     if df is None or df.empty:
         if path.exists():
             df = pd.read_csv(path)
         else:
             df = pd.DataFrame(columns=columns)
-            
-    # 【重要】不足している列を自動補完（KeyError: 'pay' 回避）
     for col in columns:
         if col not in df.columns:
             df[col] = 0 if col in ["pay", "hours", "late_hours"] else None
