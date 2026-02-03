@@ -103,25 +103,39 @@ STAFF_MASTER = [
     ("A010", "アルバイトJ", "アルバイト", 1300, 3, 80000),
 ]
 
-# 「必ず欲しい列」をここに列挙
-STAFF_COLUMNS_BASE = [
-    "staff_id",
-    "name",
-    "role",
-    "hourly_wage",
-    "desired_shifts_per_week",
-    "desired_monthly_income",
-]
-
-# 追加でほしい列（ポジション・固定休）
-STAFF_EXTRA_COLUMNS = [
-    "position",  # 店長 / 料理長 / 社員 / 調理場担当 / ホール担当 / オールラウンド など
-    "dayoff1",   # 固定休1（0=月〜6=日）
-    "dayoff2",   # 固定休2
-]
-
+# 列定義を確定
+STAFF_COLUMNS_BASE = ["staff_id", "name", "role", "hourly_wage", "desired_shifts_per_week", "desired_monthly_income"]
+STAFF_EXTRA_COLUMNS = ["position", "dayoff1", "dayoff2", "desired_shifts_per_month", "transport_daily"]
 STAFF_COLUMNS = STAFF_COLUMNS_BASE + STAFF_EXTRA_COLUMNS
 
+# 接続の確立
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except:
+    conn = None
+
+def load_csv(path: Path, columns: list) -> pd.DataFrame:
+    sheet_name = path.stem
+    try:
+        df = conn.read(worksheet=sheet_name, ttl=0)
+    except:
+        if path.exists():
+            df = pd.read_csv(path)
+        else:
+            df = pd.DataFrame(columns=columns)
+    for c in columns:
+        if c not in df.columns:
+            df[c] = None
+    return df[columns]
+
+def save_csv(df: pd.DataFrame, path: Path):
+    sheet_name = path.stem
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    try:
+        conn.update(worksheet=sheet_name, data=df)
+        st.toast(f"Synced: {sheet_name}")
+    except Exception as e:
+        st.error(f"Cloud Save Error: {e}")
 
 def load_staff_master() -> pd.DataFrame:
     """
@@ -200,43 +214,6 @@ def ensure_request_ids(requests_df: pd.DataFrame) -> pd.DataFrame:
 # =========================
 # 共通ユーティリティ
 # =========================
-# 接続の確立
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-def load_csv(path: Path, columns: list) -> pd.DataFrame:
-    """スプレッドシートから読み込み。失敗したらCSV、それでもなければ空を返す。"""
-    sheet_name = path.stem  # ファイル名(shifts等)をシート名として使用
-    
-    try:
-        # Googleシートから読み込み
-        df = conn.read(worksheet=sheet_name, ttl=0) # ttl=0で常に最新を取得
-    except Exception:
-        # シートがない、または接続エラーの場合はローカルCSV
-        if path.exists():
-            df = pd.read_csv(path)
-        else:
-            df = pd.DataFrame(columns=columns)
-            
-    # カラムの整合性チェック
-    for c in columns:
-        if c not in df.columns:
-            df[c] = None
-    return df[columns]
-
-def save_csv(df: pd.DataFrame, path: Path):
-    """CSVとGoogleスプレッドシートの両方に保存する"""
-    sheet_name = path.stem
-    
-    # ローカルCSVに保存
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-    
-    # Googleスプレッドシートに保存
-    try:
-        conn.update(worksheet=sheet_name, data=df)
-        st.toast(f"クラウド({sheet_name})に同期しました")
-    except Exception as e:
-        st.error(f"クラウド保存に失敗しました。ローカルのみ更新されます: {e}")
-
 
 def get_staff_by_name(name: str) -> pd.Series:
     return STAFF_DF[STAFF_DF["name"] == name].iloc[0]
@@ -1894,108 +1871,58 @@ def page_auto_scheduler(current_staff):
 def page_timecard(current_staff):
     st.header("⏱ タイムカード")
 
-    # データ読み込み（スプレッドシート/CSV）
-    timecards_df = load_csv(
-        TIMECARD_FILE,
-        ["date", "staff_id", "clock_in", "clock_out", "hours", "late_hours", "pay"],
-    )
+    # 必要なカラムを指定して読み込み
+    tc_cols = ["date", "staff_id", "clock_in", "clock_out", "hours", "late_hours", "pay"]
+    timecards_df = load_csv(TIMECARD_FILE, tc_cols)
 
     today = dt.date.today().strftime("%Y-%m-%d")
     now = dt.datetime.now()
     sid = str(current_staff["staff_id"])
 
-    # 今日のレコードを探す
-    existing_today = timecards_df[
-        (timecards_df["date"] == today) & (timecards_df["staff_id"] == sid)
-    ]
+    existing_today = timecards_df[(timecards_df["date"] == today) & (timecards_df["staff_id"] == sid)]
 
     st.subheader("本日の打刻")
-
     col1, col2 = st.columns(2)
+    
     with col1:
-        if st.button("出勤", use_container_width=True):
-            if existing_today.empty:
-                new_row = {
-                    "date": today,
-                    "staff_id": sid,
-                    "clock_in": now.strftime("%H:%M:%S"),
-                    "clock_out": None,
-                    "hours": 0.0,
-                    "late_hours": 0.0,
-                    "pay": 0
-                }
-                timecards_df = pd.concat([timecards_df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv(timecards_df, TIMECARD_FILE)
-                st.success("出勤打刻しました。")
-                st.rerun()
-            else:
-                st.warning("本日のレコードは既に存在します。")
+        if st.button("出勤", use_container_width=True) and existing_today.empty:
+            new_row = pd.DataFrame([{
+                "date": today, "staff_id": sid, "clock_in": now.strftime("%H:%M:%S"),
+                "clock_out": None, "hours": 0.0, "late_hours": 0.0, "pay": 0
+            }])
+            save_csv(pd.concat([timecards_df, new_row], ignore_index=True), TIMECARD_FILE)
+            st.rerun()
 
     with col2:
-        if st.button("退勤", use_container_width=True):
-            if existing_today.empty:
-                st.warning("出勤打刻がありません。")
-            else:
-                idx = existing_today.index[0]
-                if pd.notna(timecards_df.loc[idx, "clock_out"]):
-                    st.warning("既に退勤済みです。")
-                else:
-                    clock_in_str = timecards_df.loc[idx, "clock_in"]
-                    clock_out_str = now.strftime("%H:%M:%S")
-                    
-                    # --- 給与・時間計算ロジック ---
-                    fmt = "%H:%M:%S"
-                    start_t = dt.datetime.strptime(clock_in_str, fmt)
-                    end_t = dt.datetime.strptime(clock_out_str, fmt)
-                    if end_t < start_t: end_t += dt.timedelta(days=1) # 日またぎ対応
-                    
-                    total_duration_h = (end_t - start_t).total_seconds() / 3600
-                    
-                    # 1. 休憩控除（6h超で45分、8h超で1時間）
-                    break_h = 1.0 if total_duration_h > 8 else (0.75 if total_duration_h > 6 else 0.0)
-                    net_hours = max(0, total_duration_h - break_h)
-                    
-                    # 2. 深夜時間計算（22:00〜05:00）
-                    # 簡易的に22時以降の勤務を算出
-                    limit_22 = start_t.replace(hour=22, minute=0, second=0)
-                    late_h = max(0, (end_t - max(start_t, limit_22)).total_seconds() / 3600) if end_t > limit_22 else 0
-                    
-                    # 3. 金額計算（深夜分は25%増）
-                    hourly = int(current_staff["hourly_wage"])
-                    transport = int(current_staff.get("transport_daily", 0)) # 交通費設定があれば加算
-                    
-                    base_pay = net_hours * hourly
-                    late_premium = late_h * hourly * 0.25
-                    total_pay = int(base_pay + late_premium + transport)
-                    
-                    # 保存処理
-                    timecards_df.loc[idx, "clock_out"] = clock_out_str
-                    timecards_df.loc[idx, "hours"] = round(net_hours, 2)
-                    timecards_df.loc[idx, "late_hours"] = round(late_h, 2)
-                    timecards_df.loc[idx, "pay"] = total_pay
-                    
-                    save_csv(timecards_df, TIMECARD_FILE)
-                    st.success(f"退勤完了: 実働 {round(net_hours, 2)}h (深夜 {round(late_h, 2)}h) 給与 {total_pay:,}円")
-                    st.rerun()
+        if st.button("退勤", use_container_width=True) and not existing_today.empty:
+            idx = existing_today.index[0]
+            if pd.isna(timecards_df.loc[idx, "clock_out"]):
+                # 計算ロジック
+                fmt = "%H:%M:%S"
+                start_t = dt.datetime.strptime(timecards_df.loc[idx, "clock_in"], fmt)
+                end_t = now
+                diff_h = (end_t - start_t.replace(year=end_t.year, month=end_t.month, day=end_t.day)).total_seconds() / 3600
+                if diff_h < 0: diff_h += 24
+                
+                # 休憩・深夜計算
+                break_h = 1.0 if diff_h > 8 else (0.75 if diff_h > 6 else 0.0)
+                net_h = max(0, diff_h - break_h)
+                limit_22 = start_t.replace(hour=22, minute=0, second=0, year=end_t.year, month=end_t.month, day=end_t.day)
+                late_h = max(0, (end_t - max(start_t.replace(year=end_t.year, month=end_t.month, day=end_t.day), limit_22)).total_seconds() / 3600)
+                
+                # 給与確定
+                wage = int(current_staff["hourly_wage"])
+                total_pay = int((net_h * wage) + (late_h * wage * 0.25) + int(current_staff.get("transport_daily", 0) or 0))
+                
+                timecards_df.loc[idx, ["clock_out", "hours", "late_hours", "pay"]] = [now.strftime("%H:%M:%S"), round(net_h, 2), round(late_h, 2), total_pay]
+                save_csv(timecards_df, TIMECARD_FILE)
+                st.success(f"退勤完了: {total_pay}円"); st.rerun()
 
     st.markdown("---")
-    st.subheader("自分の勤怠・給与履歴")
-
-    my_records = timecards_df[timecards_df["staff_id"] == sid].copy()
-    if my_records.empty:
-        st.info("履歴がまだありません。")
-    else:
-        my_records = my_records.sort_values("date", ascending=False)
-        # 見やすくリネーム
-        display_df = my_records.rename(columns={
-            "date": "日付", "clock_in": "出勤", "clock_out": "退勤", 
-            "hours": "実働(h)", "late_hours": "深夜(h)", "pay": "概算給与"
-        })
-        st.dataframe(display_df, use_container_width=True)
-
-        total_pay = my_records["pay"].sum()
-        st.metric("今月の総支給額（概算）", f"{int(total_pay):,} 円")
-
+    my_records = timecards_df[timecards_df["staff_id"] == sid].sort_values("date", ascending=False)
+    if not my_records.empty:
+        st.metric("今月の総支給額（概算）", f"{int(my_records['pay'].sum()):,} 円")
+        st.dataframe(my_records, use_container_width=True)
 
 # =========================
 # 連絡ボード（簡易チャット）
