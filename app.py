@@ -1798,8 +1798,8 @@ def page_auto_scheduler(current_staff):
 def page_timecard(current_staff):
     st.header("⏱ タイムカード")
 
-    # 必要なカラムを指定して読み込み
-    tc_cols = ["date", "staff_id", "clock_in", "clock_out", "hours", "late_hours", "pay"]
+    # データ読み込み
+    tc_cols = FILE_SCHEMA["timecards"]
     timecards_df = load_csv(TIMECARD_FILE, tc_cols)
 
     today = dt.date.today().strftime("%Y-%m-%d")
@@ -1824,10 +1824,11 @@ def page_timecard(current_staff):
         if st.button("退勤", use_container_width=True) and not existing_today.empty:
             idx = existing_today.index[0]
             if pd.isna(timecards_df.loc[idx, "clock_out"]):
-                # 計算ロジック
                 fmt = "%H:%M:%S"
                 start_t = dt.datetime.strptime(timecards_df.loc[idx, "clock_in"], fmt)
                 end_t = now
+                
+                # 時間計算
                 diff_h = (end_t - start_t.replace(year=end_t.year, month=end_t.month, day=end_t.day)).total_seconds() / 3600
                 if diff_h < 0: diff_h += 24
                 
@@ -1837,9 +1838,13 @@ def page_timecard(current_staff):
                 limit_22 = start_t.replace(hour=22, minute=0, second=0, year=end_t.year, month=end_t.month, day=end_t.day)
                 late_h = max(0, (end_t - max(start_t.replace(year=end_t.year, month=end_t.month, day=end_t.day), limit_22)).total_seconds() / 3600)
                 
-                # 給与確定
+                # 【修正ポイント】数値変換を安全に行う
                 wage = int(current_staff["hourly_wage"])
-                total_pay = int((net_h * wage) + (late_h * wage * 0.25) + int(current_staff.get("transport_daily", 0) or 0))
+                # 交通費がない場合に備えて0をデフォルトにする
+                transport = current_staff.get("transport_daily")
+                transport_val = int(transport) if pd.notna(transport) and str(transport).isdigit() else 0
+                
+                total_pay = int((net_h * wage) + (late_h * wage * 0.25) + transport_val)
                 
                 timecards_df.loc[idx, ["clock_out", "hours", "late_hours", "pay"]] = [now.strftime("%H:%M:%S"), round(net_h, 2), round(late_h, 2), total_pay]
                 save_csv(timecards_df, TIMECARD_FILE)
