@@ -41,12 +41,21 @@ TIMECARD_FILE = DATA_DIR / "timecards.csv"
 MESSAGE_FILE = DATA_DIR / "messages.csv"
 
 # =========================================================
-# 2. GSheets連携エンジン
+# 2. GSheets連携エンジン (接続確認を強化)
 # =========================================================
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-except Exception:
-    conn = None
+def get_gsheets_connection():
+    try:
+        # Secretsから接続情報を読み込む
+        return st.connection("gsheets", type=GSheetsConnection)
+    except Exception as e:
+        # 接続できない場合、画面にエラーを表示させる
+        st.sidebar.error(f"GSheets接続エラー: {e}")
+        return None
+
+conn = get_gsheets_connection()
+
+# クラウドが生きているかチェックするフラグ
+IS_CLOUD_READY = conn is not None
 
 def load_csv(path: Path, columns: list) -> pd.DataFrame:
     """クラウド優先で読込。必ず指定されたカラムを保証する。"""
@@ -140,16 +149,13 @@ def ensure_request_ids(requests_df: pd.DataFrame) -> pd.DataFrame:
     return requests_df
 
 # =========================
-# 共通ユーティリティ
+# 共通ユーティリティ (修正版)
 # =========================
-
 def get_staff_by_name(name: str) -> pd.Series:
     return STAFF_DF[STAFF_DF["name"] == name].iloc[0]
 
-
 def get_staff_label(row) -> str:
     return f"{row['name']} ({row['role']})"
-
 
 def date_range_for_month(year: int, month: int):
     """指定年月の全日付リスト"""
@@ -157,16 +163,24 @@ def date_range_for_month(year: int, month: int):
     _, last_day = calendar.monthrange(year, month)
     return [first_day + dt.timedelta(days=i) for i in range(last_day)]
 
-
 def is_weekend(date_obj: dt.date) -> bool:
     # 金(4), 土(5), 日(6) を週末扱い
     return date_obj.weekday() >= 4
-
 
 def format_time_str(time_obj: dt.time | None) -> str:
     if pd.isna(time_obj) or time_obj is None:
         return ""
     return time_obj.strftime("%H:%M")
+
+def get_jp_holiday_name(date_obj: dt.date) -> str | None:
+    """日本の祝日名を返す。引数が文字列でも日付型でも対応。"""
+    if isinstance(date_obj, str):
+        try:
+            date_obj = dt.datetime.strptime(date_obj, "%Y-%m-%d").date()
+        except:
+            return None
+    name = jpholiday.is_holiday_name(date_obj)
+    return name if name else None
 
 
 # =========================
@@ -409,6 +423,28 @@ def render_month_calendar_with_shifts(
     title: str = "",
     current_staff_id: str | None = None,
 ):
+    """カレンダー表示のメインロジック"""
+    day_contents = {}
+    
+    # シフトデータを日付ごとに整理
+    for _, row in shifts_df.iterrows():
+        try:
+            d = dt.datetime.strptime(str(row["date"]), "%Y-%m-%d").date()
+            sid = str(row["staff_id"])
+            name = get_staff_name(sid)
+            start = str(row.get("start_time") or "")
+            line = f'<div class="cal-line">{name} {start}</div>'
+            day_contents.setdefault(d, []).append(line)
+        except:
+            continue
+
+    # 祝日情報の生成
+    holiday_info = {d: get_jp_holiday_name(d) for d in date_range_for_month(year, month) if jpholiday.is_holiday(d)}
+    
+    # 以前定義した build_month_calendar_html を呼び出して描画
+    html_code = build_month_calendar_html(year, month, day_contents, {}, holiday_info, {})
+    st.markdown(html_code, unsafe_allow_html=True)
+
     """
     year, month と シフトDataFrame から、マス目カレンダーHTMLを描画する簡易版。
     shifts_df: columns = ["date", "staff_id", "start_time", "end_time", "source"] を想定
