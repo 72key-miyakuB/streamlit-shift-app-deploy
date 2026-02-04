@@ -2227,65 +2227,45 @@ def page_admin_settings(current_staff):
                 "dayoff2_label": d2_label,
             }
 
+    # --- 保存実行ボタン ---
     if st.button("スタッフ編集内容を保存"):
-        global STAFF_DF
-        
-        # 1. セッションから編集内容を STAFF_DF に直接反映させる
-        for idx, row in STAFF_DF.iterrows():
+        # global宣言は関数の最初で行っている前提ですが、念のためここでも確認
+        # (エラーが出る場合は、この関数の1行目に global STAFF_DF を置いてください)
+
+        # 1. セッションから編集内容を反映させるための新しい器を用意
+        new_staff_df = STAFF_DF.copy()
+
+        for idx, row in new_staff_df.iterrows():
             staff_id = row["staff_id"]
             cfg = st.session_state.get(f"cfg_staff_{staff_id}")
-            if not cfg: continue
+            if not cfg: 
+                continue
 
-            STAFF_DF.at[idx, "name"] = cfg["name"]
-            STAFF_DF.at[idx, "role"] = cfg["role"]
-            STAFF_DF.at[idx, "position"] = cfg["position"]
-            STAFF_DF.at[idx, "hourly_wage"] = int(cfg["hourly_wage"])
-            STAFF_DF.at[idx, "desired_shifts_per_month"] = int(cfg["month_cap"])
-            STAFF_DF.at[idx, "desired_monthly_income"] = int(cfg["income"])
+            # 各値を反映
+            new_staff_df.at[idx, "name"] = cfg["name"]
+            new_staff_df.at[idx, "role"] = cfg["role"]
+            new_staff_df.at[idx, "position"] = cfg["position"]
+            new_staff_df.at[idx, "hourly_wage"] = int(cfg["hourly_wage"])
+            new_staff_df.at[idx, "desired_shifts_per_month"] = int(cfg["month_cap"])
+            new_staff_df.at[idx, "desired_monthly_income"] = int(cfg["income"])
 
             # 固定休の反映
             if cfg["role"] == "社員":
                 l1, l2 = cfg["dayoff1_label"], cfg["dayoff2_label"]
-                STAFF_DF.at[idx, "dayoff1"] = weekday_label_to_value[l1] if l1 in weekday_label_to_value else pd.NA
-                STAFF_DF.at[idx, "dayoff2"] = weekday_label_to_value[l2] if l2 in weekday_label_to_value else pd.NA
+                new_staff_df.at[idx, "dayoff1"] = weekday_label_to_value[l1] if l1 in weekday_label_to_value else pd.NA
+                new_staff_df.at[idx, "dayoff2"] = weekday_label_to_value[l2] if l2 in weekday_label_to_value else pd.NA
             else:
-                STAFF_DF.at[idx, "dayoff1"] = pd.NA
-                STAFF_DF.at[idx, "dayoff2"] = pd.NA
+                new_staff_df.at[idx, "dayoff1"] = pd.NA
+                new_staff_df.at[idx, "dayoff2"] = pd.NA
 
-            # 2. 最新になった STAFF_DF をクラウドとローカルに保存（一回だけ呼ぶ）
-            save_csv(STAFF_DF, STAFF_FILE)
-            
-            st.success("スタッフ情報を保存し、Google Sheetsと同期しました。")
-            st.rerun()
-
-            # 月あたり最大シフト回数を本命として保存
-            #month_cap = int(cfg["month_cap"])
-            #staff_df.at[idx, "desired_shifts_per_month"] = month_cap
-
-            # 互換用に「週あたり目安」も入れておきたい場合（任意）
-            #week_cap = max(month_cap // 4, 0)
-            #staff_df.at[idx, "desired_shifts_per_week"] = week_cap
-
-            #staff_df.at[idx, "desired_monthly_income"] = int(cfg["income"])
-
-            #if cfg["role"] == "社員":
-                #l1 = cfg["dayoff1_label"]
-                #l2 = cfg["dayoff2_label"]
-                #staff_df.at[idx, "dayoff1"] = (
-                    #weekday_label_to_value[l1] if l1 in weekday_label_to_value else pd.NA
-                #)
-                #staff_df.at[idx, "dayoff2"] = (
-                    #weekday_label_to_value[l2] if l2 in weekday_label_to_value else pd.NA
-                #)
-            #else:
-                #staff_df.at[idx, "dayoff1"] = pd.NA
-                #staff_df.at[idx, "dayoff2"] = pd.NA
-
-        # 自作の save_csv 関数を使う（これで GSheets にも飛ぶ）
-        #save_csv(staff_df, Path(STAFF_FILE))
-        # グローバル変数を更新
-        #st.session_state["STAFF_DF"] = staff_df 
-        #st.success("スタッフ情報を保存し、スプレッドシートと同期しました。")
+        # 2. 【ループの外】全員分の処理が終わってから、一度だけ保存する
+        save_csv(new_staff_df, STAFF_FILE)
+        
+        # 3. アプリ全体のデータ(本尊)を更新
+        STAFF_DF = new_staff_df
+        
+        st.success("スタッフ情報を保存し、Google Sheetsと同期しました！")
+        st.rerun()
 
     # ---------------- 新規スタッフ追加 ----------------
     st.markdown("---")
